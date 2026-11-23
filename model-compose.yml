@@ -1,0 +1,58 @@
+controller:
+  adapter:
+    type: http-server
+    port: ${env.PORT | 8096}
+    base_path: /api
+  webui:
+    driver: gradio
+    port: ${env.SERVER_PORT | 8097}
+
+workflows:
+  - id: generate
+    title: Change the camera angle
+    description: Redraw the source image from the camera angle of a coarse guide render.
+    job:
+      input: ${input}
+      output: ${output as image/png}
+
+component:
+  type: model
+  task: image-generation
+  driver: huggingface
+  architecture: qwen-image
+  device: cuda
+  # For a 24 GB card. Remove on machines where the CPU and GPU share memory, such as DGX Spark.
+  cpu_offload: model
+  model:
+    provider: huggingface
+    repository: ${env.BASE_REPO | Qwen/Qwen-Image-2.1-Turbo}
+    token: ${env.HF_TOKEN | }
+  # diffusers warns that it skips the img_mlp.gate_up keys; the results match a converted copy closely.
+  peft_adapter:
+    - type: lora
+      name: angle
+      model:
+        provider: huggingface
+        repository: lilylilith/QI_2.1_AnyAngle
+        filename: QI2.1_AnyAngle.safetensors
+        revision: 5c8b4c8e05ba6328d54bf8d34ec724fef5a414ae
+  max_concurrent_count: 1
+  runtime:
+    type: virtualenv
+    driver: python
+    path: .venv/qwen-image
+  action:
+    peft_adapter:
+      - name: angle
+        weight: ${env.ANGLE_LORA_WEIGHT | 1.0}
+    prompt: ${input.prompt as text | Change the camera angle from <image2> to <image1>.}
+    # Order matters: the source photo first, then the guide render.
+    image:
+      - ${input.source as image}
+      - ${input.guide as image}
+    width: ${input.width as integer}
+    height: ${input.height as integer}
+    seed: ${input.seed as integer | 42}
+    params:
+      inference_steps: ${env.STEPS | 8}
+      true_cfg_scale: ${env.CFG | 1.0}
